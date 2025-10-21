@@ -8,6 +8,27 @@ provider "aws" {
   }
 }
 
+check "certificate" {
+  assert {
+    condition     = aws_acm_certificate.cert.status == "ISSUED"
+    error_message = "Certificate status is ${aws_acm_certificate.cert.status}"
+  }
+}
+
+
+check "response" {
+  data "http" "terramino" {
+    url      = "https://${aws_lb.terramino.dns_name}"
+    insecure = true
+  }
+
+  assert {
+    condition     = data.http.terramino.status_code == 200
+    error_message = "Terramino response is ${data.http.terramino.status_code}"
+  }
+}
+
+
 data "aws_availability_zones" "available" {
   state = "available"
 }
@@ -35,12 +56,17 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-resource "aws_launch_configuration" "terramino" {
-  name_prefix     = "terramino-"
-  image_id        = data.aws_ami.amazon_linux.id
-  instance_type   = "t2.micro"
-  user_data       = file("user-data.sh")
-  security_groups = [aws_security_group.terramino_instance.id]
+resource "aws_launch_template" "terramino" {
+  name_prefix   = "terramino-"
+
+  image_id      = data.aws_ami.amazon_linux.id
+  instance_type = "t2.small"
+
+  user_data = base64encode(file("user-data.sh"))
+
+  network_interfaces {
+    security_groups = [aws_security_group.terramino_instance.id]
+  }
 
   lifecycle {
     create_before_destroy = true
@@ -52,8 +78,12 @@ resource "aws_autoscaling_group" "terramino" {
   min_size             = 1
   max_size             = 2
   desired_capacity     = 1
-  launch_configuration = aws_launch_configuration.terramino.name
   vpc_zone_identifier  = module.vpc.public_subnets
+
+  launch_template {
+    id      = aws_launch_template.terramino.id
+    version = "$Latest"
+  }
 
   tag {
     key                 = "Name"
